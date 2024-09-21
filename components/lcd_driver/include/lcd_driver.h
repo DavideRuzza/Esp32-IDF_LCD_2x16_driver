@@ -69,7 +69,7 @@ typedef struct{
     uint8_t RL; // move rx/lx
 
 
-} lcd_setting_t;
+} lcd_config_t;
 
 typedef struct {
     int rs; // register select: 0 command, 1 data
@@ -78,15 +78,31 @@ typedef struct {
     int d5;
     int d6;
     int d7;
-    lcd_setting_t setting;
+    lcd_config_t setting;
 } lcd_t;
+
+typedef enum {
+    LCD_CMD_CLEAR,
+    LCD_CMD_SET_CURSOR,
+    LCD_CMD_PRINT_STRING
+} lcd_async_cmd_t;
+
+typedef struct {
+    lcd_async_cmd_t command;
+    union {
+        struct {
+            uint8_t row;
+            uint8_t col;
+        } cursor;
+        char message[32];  // Messaggio da stampare
+    } data;
+} lcd_message_t;
 
 
 void lcd_init(lcd_t *lcd, int rs, int en, int d4, int d5, int d6, int d7);
-// void init_lcd(lcd_t *lcd, int rs, int en, int d4, int d5, int d6, int d7);
 void pulse_en(lcd_t *lcd);
-void send_cmd(lcd_t *lcd, uint8_t instr);
-void send_data(lcd_t *lcd, uint8_t data);
+void lcd_command(lcd_t *lcd, uint8_t instr);
+void lcd_data(lcd_t *lcd, uint8_t data);
 void set_cmd_H(lcd_t *lcd, uint8_t word);
 void set_cmd_L(lcd_t *lcd, uint8_t word);
 void send_H(lcd_t *lcd, uint8_t word);
@@ -98,13 +114,14 @@ void lcd_write(lcd_t *lcd, char c);
 void lcd_print(lcd_t *lcd, const char *str);
 void lcd_set_cursor(lcd_t *lcd, uint8_t row, uint8_t col);
 
+void lcd_clear_async();
+void lcd_print_async(const char *str);
+void lcd_set_cursor_async(uint8_t row, uint8_t col);
 
 void lcd_display_on(lcd_t *lcd);
 void lcd_display_off(lcd_t *lcd);
-
 void lcd_cursor_on(lcd_t *lcd);
 void lcd_cursor_off(lcd_t *lcd);
-
 void lcd_blink_on(lcd_t *lcd);
 void lcd_blink_off(lcd_t *lcd);
 

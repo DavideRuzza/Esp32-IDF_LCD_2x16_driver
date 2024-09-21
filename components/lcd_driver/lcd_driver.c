@@ -2,6 +2,7 @@
 #include "lcd_driver.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
 
@@ -30,6 +31,37 @@ void IRAM_ATTR delayMicroseconds(uint32_t us){
 }
 ///////////////////////////
 
+static QueueHandle_t lcd_queue = NULL;
+
+void lcd_task(void *pvParameters) {
+    lcd_t * lcd = (lcd_t *)pvParameters;
+
+    lcd_message_t msg;
+
+    while (1) {
+        // Attendi un nuovo messaggio nella coda
+        if (xQueueReceive(lcd_queue, &msg, portMAX_DELAY)) {
+            switch (msg.command) {
+                case LCD_CMD_CLEAR:
+                    lcd_clear(lcd);  // Funzione che implementa il comando di cancellazione
+                    break;
+
+                case LCD_CMD_SET_CURSOR:
+                    lcd_set_cursor(lcd, msg.data.cursor.row, msg.data.cursor.col);
+                    break;
+
+                case LCD_CMD_PRINT_STRING:
+                    lcd_print(lcd, msg.data.message);  // Stampa la stringa ricevuta
+                    break;
+
+                default:
+                    break;
+            }
+        }
+    }
+}
+
+
 void lcd_init(lcd_t *lcd, int rs, int en, int d4, int d5, int d6, int d7){
     lcd->rs = rs;
     lcd->en = en;
@@ -48,7 +80,7 @@ void lcd_init(lcd_t *lcd, int rs, int en, int d4, int d5, int d6, int d7){
     gpio_set_level(lcd->rs, 0);
     gpio_set_level(lcd->en, 0);
 
-    lcd_setting_t *sett = &(lcd->setting);
+    lcd_config_t *sett = &(lcd->setting);
 
     sett->DL = LCD_4BITMODE;
     sett->N = LCD_2LINE;   // default 2 lines
@@ -68,19 +100,32 @@ void lcd_init(lcd_t *lcd, int rs, int en, int d4, int d5, int d6, int d7){
     vTaskDelay(50/portTICK_PERIOD_MS); // at least 40ms
 
     send_H(lcd, 0x30);
-    delayMicroseconds(4500);
+    vTaskDelay(5/portTICK_PERIOD_MS);
+    // delayMicroseconds(4500);
 
     send_H(lcd, 0x30);
-    delayMicroseconds(4500);
+    vTaskDelay(5/portTICK_PERIOD_MS);
+    // delayMicroseconds(4500);
 
     send_H(lcd, 0x30);
     delayMicroseconds(150);
 
     send_H(lcd, 0x20);
-    delayMicroseconds(150);
-    send_cmd(lcd, function_set);
-    send_cmd(lcd, disp_opt);
-    send_cmd(lcd, entry_mode);
+    // delayMicroseconds(150);
+    lcd_command(lcd, function_set);
+    lcd_command(lcd, disp_opt);
+    lcd_command(lcd, entry_mode);
+
+
+    // start queue and task
+    lcd_queue = xQueueCreate(10, sizeof(lcd_message_t));
+    
+    if (lcd_queue == NULL) {
+        // Gestione dell'errore di creazione della coda
+        printf("Errore: impossibile creare la coda LCD.\n");
+        return;
+    }
+    xTaskCreate(lcd_task, "LCD Task", 4096, lcd, 3, NULL);
 
 }
 
@@ -104,7 +149,7 @@ void send_L(lcd_t *lcd, uint8_t word){
     pulse_en(lcd);
 }
 
-void send_cmd(lcd_t *lcd, uint8_t instr){
+void lcd_command(lcd_t *lcd, uint8_t instr){
 
     gpio_set_level(lcd->rs, 0);
 
@@ -113,7 +158,7 @@ void send_cmd(lcd_t *lcd, uint8_t instr){
 
 }
 
-void send_data(lcd_t *lcd, uint8_t data){
+void lcd_data(lcd_t *lcd, uint8_t data){
 
     gpio_set_level(lcd->rs, 1);
 
@@ -139,17 +184,17 @@ void set_cmd_L(lcd_t *lcd, uint8_t word){
 /////////////////////////////////////
 
 void lcd_clear(lcd_t *lcd){
-    send_cmd(lcd, CMD_CLEARDISPLAY);
+    lcd_command(lcd, CMD_CLEARDISPLAY);
     delayMicroseconds(2000);
 }
 
 void lcd_home(lcd_t *lcd){
-    send_cmd(lcd, CMD_RETURNHOME);
+    lcd_command(lcd, CMD_RETURNHOME);
     delayMicroseconds(2000);
 }
 
 void lcd_write(lcd_t *lcd, char c){
-    send_data(lcd, (uint8_t)c);
+    lcd_data(lcd, (uint8_t)c);
 }
 
 
@@ -165,53 +210,79 @@ void lcd_set_cursor(lcd_t *lcd, uint8_t row, uint8_t col) {
     uint8_t address;
     if (row == 0) {
         address = col; // Prima riga, indirizzo 0x00-0x0F
-        send_cmd(lcd, 0x80 | address); // Comando per impostare l'indirizzo del cursore
+        lcd_command(lcd, 0x80 | address); // Comando per impostare l'indirizzo del cursore
     } else if (row == 1) {
         address = 0x40 + col; // Seconda riga, indirizzo 0x40-0x4F
-        send_cmd(lcd, 0x80 | address);
+        lcd_command(lcd, 0x80 | address);
     }
 }
 
 
 void lcd_display_on(lcd_t *lcd){
-    lcd_setting_t *sett = &(lcd->setting);
+    lcd_config_t *sett = &(lcd->setting);
     sett->D = LCD_DISPLAYON;
     uint8_t cmd = CMD_DISPLAYCONTROL | sett->D | sett->C | sett->B;
-    send_cmd(lcd, cmd);
+    lcd_command(lcd, cmd);
 }
 
 void lcd_display_off(lcd_t *lcd){
-    lcd_setting_t *sett = &(lcd->setting);
+    lcd_config_t *sett = &(lcd->setting);
     sett->D = LCD_DISPLAYOFF;
     uint8_t cmd = CMD_DISPLAYCONTROL | sett->D | sett->C | sett->B;
-    send_cmd(lcd, cmd);
+    lcd_command(lcd, cmd);
 }
 
 void lcd_cursor_on(lcd_t *lcd){
-    lcd_setting_t *sett = &(lcd->setting);
+    lcd_config_t *sett = &(lcd->setting);
     sett->C = LCD_CURSORON;
     uint8_t cmd = CMD_DISPLAYCONTROL | sett->D | sett->C | sett->B;
-    send_cmd(lcd, cmd);
+    lcd_command(lcd, cmd);
 }
 
 void lcd_cursor_off(lcd_t *lcd){
-    lcd_setting_t *sett = &(lcd->setting);
+    lcd_config_t *sett = &(lcd->setting);
     sett->C = LCD_CURSOROFF;
     uint8_t cmd = CMD_DISPLAYCONTROL | sett->D | sett->C | sett->B;
-    send_cmd(lcd, cmd);
+    lcd_command(lcd, cmd);
 }
 
 
 void lcd_blink_on(lcd_t *lcd){
-    lcd_setting_t *sett = &(lcd->setting);
+    lcd_config_t *sett = &(lcd->setting);
     sett->B = LCD_BLINKON;
     uint8_t cmd = CMD_DISPLAYCONTROL | sett->D | sett->C | sett->B;
-    send_cmd(lcd, cmd);
+    lcd_command(lcd, cmd);
 }
 
 void lcd_blink_off(lcd_t *lcd){
-    lcd_setting_t *sett = &(lcd->setting);
+    lcd_config_t *sett = &(lcd->setting);
     sett->B = LCD_BLINKOFF;
     uint8_t cmd = CMD_DISPLAYCONTROL | sett->D | sett->C | sett->B;
-    send_cmd(lcd, cmd);
+    lcd_command(lcd, cmd);
+}
+
+
+// ///////////////// ASYNC FUNCTIONS
+
+void lcd_clear_async() {
+    lcd_message_t msg;
+    msg.command = LCD_CMD_CLEAR;
+    xQueueSend(lcd_queue, &msg, portMAX_DELAY);
+}
+
+// Funzione per impostare il cursore in modo asincrono
+void lcd_set_cursor_async(uint8_t row, uint8_t col) {
+    lcd_message_t msg;
+    msg.command = LCD_CMD_SET_CURSOR;
+    msg.data.cursor.row = row;
+    msg.data.cursor.col = col;
+    xQueueSend(lcd_queue, &msg, portMAX_DELAY);
+}
+
+// Funzione per stampare un messaggio in modo asincrono
+void lcd_print_async(const char *message) {
+    lcd_message_t msg;
+    msg.command = LCD_CMD_PRINT_STRING;
+    sprintf(msg.data.message, "%s", message);
+    xQueueSend(lcd_queue, &msg, portMAX_DELAY);
 }
